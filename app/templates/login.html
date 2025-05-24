@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Login · HGFI Performance Center</title>
+  <!-- Tailwind + Flowbite -->
+  <link href="https://cdn.jsdelivr.net/npm/flowbite@2.3.0/dist/flowbite.min.css" rel="stylesheet"/>
+  <script src="https://cdn.jsdelivr.net/npm/flowbite@2.3.0/dist/flowbite.min.js"></script>
+  <style>
+    :root{
+      --primary:        #6366f1;   /* grape */
+      --primary-dark:   #4f46e5;   /* grape dark */
+      --secondary:      #f59e0b;   /* honey */
+      --secondary-dark: #d97706;   /* honey dark */
+      --accent:         #6ee7b7;   /* mint */
+    }
+  </style>
+</head>
+<body class="h-full flex items-center justify-center bg-gradient-to-br from-indigo-700 to-amber-500">
+  <!-- Login Card -->
+  <div class="max-w-sm w-full p-8 rounded-2xl shadow-2xl text-center" style="background-color: rgba(99,102,241,0.9);">
+    <!-- Full-body mascot -->
+    <img src="{{ url_for('static', filename='img/bee_boy.png') }}"
+         alt="HGFI Mascot" class="mx-auto mb-6 h-36 drop-shadow-lg" />
+
+    <h1 class="text-3xl font-extrabold text-white mb-4">HGFI Performance Center</h1>
+    <p class="text-white mb-6">
+      Welcome! Please sign in with your <strong>@honeygofixit.com</strong> Google account.
+    </p>
+
+    <!-- Google Sign-In button -->
+    <a href="{{ auth_url }}"
+       class="inline-flex items-center justify-center w-full bg-white hover:bg-gray-100 border border-gray-300 text-gray-800 font-medium py-2 px-4 rounded-md shadow transition">
+      <svg class="h-5 w-5 mr-2" viewBox="0 0 533.5 544.3" xmlns="http://www.w3.org/2000/svg">
+        <path fill="#4285F4" d="M533.5 278.4c0-17.4-1.5-34.1-4.3-50.4H272v95.5h146.9c-6.3 34.3-25.2 63.4-53.8 83v68h87.1c51-47 80.3-116.4 80.3-196.1z"/>
+        <path fill="#34A853" d="M272 544.3c72.6 0 133.6-24 178.1-65.3l-87.1-68c-24.6 16.5-56 26.2-91 26.2-69.8 0-128.9-47.1-150.2-110.3h-89.6v69.4c44.3 88.8 136.4 148 239.8 148z"/>
+        <path fill="#FBBC05" d="M121.8 324.9c-10.6-31.3-10.6-65.3 0-96.6v-69.4h-89.6c-25.3 49.4-25.3 105.5 0 154.9l89.6-69.4z"/>
+        <path fill="#EA4335" d="M272 107.7c39.6 0 75.1 13.6 103.1 40.4l77.3-77.3C405.6 24.9 345.4 0 272 0 168.6 0 76.5 59.2 32.2 148l89.6 69.4C143.1 154.8 202.2 107.7 272 107.7z"/>
+      </svg>
+      <span>Sign in with Google</span>
+    </a>
+  </div>
+</body>
+</html>

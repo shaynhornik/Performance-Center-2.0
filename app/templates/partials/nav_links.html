@@ -1,0 +1,18 @@
+{% set links = [
+  ('core.index',        'Home'),
+  ('dash.dashboard',    'Dashboard'),
+  ('team.performance',  'Team Performance'),
+  ('resources.index',   'Success Resources'),
+  ('settings.index',    'Settings'),
+] %}
+
+{% for ep,label in links %}
+  <a class="navlink {{ 'active' if url_for(ep)==request.path else '' }}"
+     href="{{ url_for(ep) }}">{{ label }}</a>
+{% endfor %}
+
+{% if session.get('user') %}
+  <a class="navlink" href="{{ url_for('auth.logout') }}">Log out</a>
+{% else %}
+  <a class="navlink" href="{{ url_for('auth.login') }}">Log in</a>
+{% endif %}

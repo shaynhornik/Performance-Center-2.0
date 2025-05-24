@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}Welcome · HGFI Performance Center{% endblock %}
+
+{% block content %}
+<section
+  class="rounded-2xl overflow-hidden shadow-lg"
+  style="background:linear-gradient(135deg, var(--primary-light, #e0e7ff), #fff);"
+>
+  <div class="max-w-7xl mx-auto px-6 py-12 md:flex md:items-center md:space-x-8">
+
+    <!-- Text column -->
+    <div class="md:w-1/2">
+      <h1 class="text-4xl md:text-5xl font-extrabold text-indigo-600 mb-4">
+        Welcome to the HGFI Performance Center
+      </h1>
+      <p class="text-lg text-slate-700 mb-6">
+        Welcome to the Honey Go Fix It Performance Center, your one-stop shop for real-time KPIs, team analytics, personalized dashboards, and essential tools to thrive at work, and beyond! Our co-founder and resident vibe coder, Shayn, is continually cooking up fresh features to make your work smoother and life sweeter. Got an idea or a request? Give him a buzz!
+      </p>
+      <a href="{{ url_for('dash.dashboard') }}"
+         class="inline-block bg-indigo-600 hover:bg-indigo-700 text-white font-semibold
+                py-3 px-6 rounded-lg shadow transition">
+        View Dashboard
+      </a>
+    </div>
+
+    <!-- Image column -->
+    <div class="md:w-1/2 mt-8 md:mt-0">
+      <img src="{{ url_for('static', filename='img/bee_boy.png') }}"
+           alt="Honey Go Fix It Mascot"
+           class="w-full h-auto drop-shadow-2xl"/>
+    </div>
+
+  </div>
+</section>
+{% endblock %}
