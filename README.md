@@ -44,26 +44,3 @@ Pulls raw JSON payloads from HouseCall Pro, flattens them into Postgres tables, 
    git clone https://github.com/your-username/HGFI-Performance-Center.git
    cd HGFI-Performance-Center
 
-Project structure
-.
-├── app/
-│   ├── __init__.py          # Flask app factory
-│   ├── auth.py              # Google OAuth routes
-│   ├── db.py                # Supabase client
-│   ├── etl.py               # Pull, upsert & flatten scripts
-│   └── views/
-│       ├── dashboard.py     # KPI view & layout logic
-│       ├── resources.py
-│       ├── team.py
-│       └── settings.py
-├── migrations/              # Supabase SQL migrations
-├── scripts/
-│   └── sample_keys.py       # helper to inspect raw JSON shape
-├── static/                  # CSS, JS, images (bee boy mascot, etc.)
-├── templates/
-│   ├── dashboard.html
-│   ├── login.html
-│   └── …  
-├── README.md
-├── pyproject.toml
-└── main.py                  # entry-point
