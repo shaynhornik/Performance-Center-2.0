@@ -7,13 +7,11 @@
   <h2 class="text-2xl font-bold">Customizable KPIs</h2>
   <div class="space-x-2">
     <!-- Toggles drag mode -->
-    <button id="edit-btn"
-            class="px-4 py-2 bg-indigo-600 text-white rounded">
+    <button id="edit-btn" class="px-4 py-2 bg-indigo-600 text-white rounded">
       Edit
     </button>
     <!-- Clears custom layout -->
-    <button id="reset-btn"
-            class="px-4 py-2 bg-red-500 text-white rounded">
+    <button id="reset-btn" class="px-4 py-2 bg-red-500 text-white rounded">
       Reset to Default
     </button>
   </div>
@@ -28,13 +26,26 @@
         <div class="card bg-white rounded-lg shadow p-6" data-key="{{ k }}">
           <h3 class="text-lg font-semibold text-slate-700">{{ label }}</h3>
           <p class="mt-4 text-3xl font-bold text-indigo-500">
-            {{ kpi_values[k] }}
+            {% if k == 'conversion_rate' %}
+              {{ '%.1f'|format(kpi_values[k]) }}%
+            {% elif k in ['total_revenue','attributed_revenue'] %}
+              ${{ "{:,.2f}".format(kpi_values[k]) }}
+            {% elif k == 'avg_ticket' %}
+              ${{ "{:,.2f}".format(kpi_values[k]) }}
+            {% elif k == 'hours_worked' %}
+            {{ '%.2f'|format(kpi_values[k]) }} h
+            {% else %}
+              {{ "{:,}".format(kpi_values[k] | int) }}
+            {% endif %}
           </p>
           <p class="text-xs text-slate-500 mt-1">
             {% if selected_period == 'custom' %}
               {{ start_date }} to {{ end_date }}
             {% else %}
-              {{ period_label }}
+              {{ time_options 
+                  | selectattr(0,'equalto',selected_period) 
+                  | map(attribute=1) 
+                  | first }}
             {% endif %}
           </p>
         </div>
@@ -43,17 +54,26 @@
   {% endfor %}
 </div>
 
+
+
+
+
+{% if debug_estimate_ids %}
+  <section class="mt-8 p-4 bg-gray-100 rounded">
+    <h2 class="text-lg font-semibold text-gray-700">Debug: IDs counted</h2>
+    <pre class="text-sm text-gray-600">{{ debug_estimate_ids | join("\n") }}</pre>
+  </section>
+{% endif %}
+
 {# ─────── SELECTORS ─────── #}
 <form method="get" class="bg-white rounded-lg shadow p-6">
   <div class="flex flex-col lg:flex-row lg:items-end lg:space-x-6">
     <!-- KPI multi-select -->
     <div class="flex-1 mb-4 lg:mb-0">
       <label class="block text-sm font-medium text-slate-700 mb-1">Metrics</label>
-      <select name="kpi" multiple
-              class="w-full border border-slate-300 rounded p-2 bg-white">
+      <select name="kpi" multiple class="w-full border border-slate-300 rounded p-2 bg-white">
         {% for key,label in kpis %}
-          <option value="{{ key }}"
-            {% if key in selected_kpis %}selected{% endif %}>
+          <option value="{{ key }}" {% if key in selected_kpis %}selected{% endif %}>
             {{ label }}
           </option>
         {% endfor %}
@@ -63,11 +83,9 @@
     <!-- Time-period dropdown -->
     <div class="w-64 mb-4 lg:mb-0">
       <label class="block text-sm font-medium text-slate-700 mb-1">Time Period</label>
-      <select name="period"
-              class="w-full border border-slate-300 rounded p-2 bg-white">
+      <select name="period" class="w-full border border-slate-300 rounded p-2 bg-white">
         {% for val,text in time_options %}
-          <option value="{{ val }}"
-            {% if val == selected_period %}selected{% endif %}>
+          <option value="{{ val }}" {% if val == selected_period %}selected{% endif %}>
             {{ text }}
           </option>
         {% endfor %}
@@ -124,18 +142,12 @@ let sortable   = null;
 // Toggle Edit / Done
 editBtn.addEventListener("click", () => {
   if (!sortable) {
-    // enter edit mode
-    sortable = Sortable.create(container, {
-      animation: 150,
-      ghostClass: 'bg-slate-200',
-    });
+    sortable = Sortable.create(container, { animation: 150, ghostClass: 'bg-slate-200' });
     editBtn.textContent = "Done";
   } else {
-    // exit edit mode
     sortable.destroy();
     sortable = null;
     editBtn.textContent = "Edit";
-    // optionally auto-save here if you want
   }
 });
 
@@ -147,3 +159,4 @@ resetBtn.addEventListener("click", () => {
 </script>
 
 {% endblock %}
+
