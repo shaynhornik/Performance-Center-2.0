@@ -197,6 +197,36 @@ FLATTEN_MAP = {
     "tsheets":          flatten_tsheets,
 }
 
+# ─── RAMP EXPENSES FETCHER & FLATTENER ────────────────────────────────
+import scripts.fetch_ramp_expenses as ramp_fetcher
+
+def fetch_ramp_expenses():
+    """Fetch raw expense dicts from Ramp API."""
+    return ramp_fetcher.fetch_all_expenses()
+
+def flatten_ramp_expenses(items):
+    """Flatten the Ramp expense dicts into ramp_expenses_flat."""
+    sb = get_supabase()
+    rows = []
+    for exp in items:
+        rows.append({
+            "id":                exp["id"],
+            "transaction_time":  exp.get("user_transaction_time"),
+            "amount":            exp.get("amount"),
+            "currency_code":     exp.get("currency_code"),
+            "merchant_name":     exp.get("merchant_name"),
+            "spend_category":    exp.get("sk_category_name"),
+            "status":            exp.get("state"),
+            "receipt_count":     len(exp.get("receipts", [])),
+            "synced_at":         exp.get("synced_at"),
+        })
+    print(f"Flattening {len(rows)} ramp expenses → ramp_expenses_flat")
+    sb.table("ramp_expenses_flat").upsert(rows).execute()
+
+FLATTEN_MAP["ramp_expenses"] = flatten_ramp_expenses
+# ───────────────────────────────────────────────────────────────────────
+
+
 # ─── TSheets USERS ──────────────────────────────────────────────────────────
 def fetch_tsheets_users():
     url = f"{TSHEETS_BASE_URL}/users"
@@ -318,6 +348,11 @@ ENTITY_CONFIG = {
                              "id":    lambda itm: itm["id"]},
     "tsheets_users":    {"fetch": fetch_tsheets_users,        "table": "tsheets_users_flat",
                              "id":    lambda u: u["id"]},
+    "ramp_expenses": {
+        "fetch": fetch_ramp_expenses,
+        "table": "ramp_raw_expenses",
+        "id":    lambda exp: exp["id"],
+    },
     "bootstrap":        {"fetch": lambda: None,            "table": None,                   "id": None},
 }
 
