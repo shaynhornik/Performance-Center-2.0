@@ -4,7 +4,7 @@ import time
 import requests
 import asyncio
 import aiohttp
-from datetime import date
+from datetime import date, datetime, timedelta
 from app.db import get_supabase
 
 print("🔧 Loading ETL module as:", __name__, "– sys.argv:", sys.argv)
@@ -117,8 +117,12 @@ def flatten_job_appointments(items):
                 "end_time":               appt.get("end_time"),
                 "arrival_window_minutes": appt.get("arrival_window_minutes"),
             })
+
     print(f"Flattening {len(rows)} appt‑tech pairs → job_appointments_flat")
-    sb.table("job_appointments_flat").upsert(rows).execute()
+
+    if rows:                                   # ← guard: only upsert if >0
+        sb.table("job_appointments_flat").upsert(rows).execute()
+
 
 
 def flatten_job_invoices(items):
@@ -135,8 +139,12 @@ def flatten_job_invoices(items):
         "due_amount":     inv.get("due_amount"),
         "invoice_number": inv.get("invoice_number"),
     } for inv in items]
+
     print(f"Flattening {len(rows)} invoices → job_invoices_flat")
-    sb.table("job_invoices_flat").upsert(rows).execute()
+
+    if rows:                                   # ← guard: only upsert if >0
+        sb.table("job_invoices_flat").upsert(rows).execute()
+
 
 
 def flatten_tsheets(items):
@@ -201,8 +209,18 @@ FLATTEN_MAP = {
 import scripts.fetch_ramp_expenses as ramp_fetcher
 
 def fetch_ramp_expenses():
-    """Fetch raw expense dicts from Ramp API."""
-    return ramp_fetcher.fetch_all_expenses()
+    """
+    Return all Ramp transactions from the past 90 days.
+    Adjust the window as needed (e.g. 30 days for hourly runs,
+    or very wide for a one‑time bootstrap).
+    """
+    to_dt   = datetime.utcnow()
+    from_dt = to_dt - timedelta(days=90)
+
+    return ramp_fetcher.fetch_all_transactions(
+        from_dt.isoformat(timespec="seconds") + "Z",
+        to_dt  .isoformat(timespec="seconds") + "Z",
+    )
 
 def flatten_ramp_expenses(items):
     """Flatten the Ramp expense dicts into ramp_expenses_flat."""
@@ -221,7 +239,9 @@ def flatten_ramp_expenses(items):
             "synced_at":         exp.get("synced_at"),
         })
     print(f"Flattening {len(rows)} ramp expenses → ramp_expenses_flat")
-    sb.table("ramp_expenses_flat").upsert(rows).execute()
+    if rows:
+        sb.table("ramp_expenses_flat").upsert(rows).execute()
+
 
 FLATTEN_MAP["ramp_expenses"] = flatten_ramp_expenses
 # ───────────────────────────────────────────────────────────────────────
@@ -283,15 +303,39 @@ async def _get_json(session, url):
             return await resp.json()
 
 async def _fetch_nested(job_ids, nested):
-    key  = nested
-    base = f"{HCP_BASE_URL}/jobs"
+    """
+    Fetch /jobs/<id>/<nested> for every job.
+    `nested` is either 'job_appointments' or 'job_invoices'
+    (legacy names used in ENTITY_CONFIG).
+
+    New API paths & keys:
+        job_appointments → appointments
+        job_invoices     → invoices
+    """
+    path_key = {
+        "job_appointments": "appointments",
+        "job_invoices":     "invoices",
+    }[nested]                         # will KeyError if we typo 'nested'
+
+    base_url = f"{HCP_BASE_URL}/jobs"
     all_items = []
+
     async with aiohttp.ClientSession() as sess:
-        tasks = [asyncio.create_task(_get_json(sess, f"{base}/{jid}/{nested}")) for jid in job_ids]
+        tasks = [
+            asyncio.create_task(
+                _get_json(sess, f"{base_url}/{jid}/{path_key}")
+            )
+            for jid in job_ids
+        ]
+
         for task in asyncio.as_completed(tasks):
             data = await task
-            all_items.extend(data.get(key, []))
+            if not data:               # 404 or 204 ⇒ skip
+                continue
+            all_items.extend(data.get(path_key, []))
+
     return all_items
+
 
 
 def fetch_employees():      return fetch_paginated(f"{HCP_BASE_URL}/employees", "employees")
@@ -358,19 +402,21 @@ ENTITY_CONFIG = {
 
 # ─── UPSERT & CLI ENTRY ───────────────────────────────────────────────────────
 
+# ─── REPLACE your current upsert() with this version ──────────────
 def upsert(entity: str, items):
+    """
+    Push raw payloads into the *_raw_* table for <entity>.
+    Prints exactly one concise line: the row count + table name.
+    """
     cfg = ENTITY_CONFIG[entity]
     sb  = get_supabase()
-    rows = []
-    for itm in items[:3]: print("SAMPLE item:", itm)
-    for itm in items:
-        try:
-            rows.append({"id": cfg["id"](itm), "payload": itm})
-        except Exception:
-            pass
+    rows = [{"id": cfg["id"](itm), "payload": itm} for itm in items]
+
     if rows:
-        print(f"Upserting {len(rows)} into {cfg['table']}…")
-        print(sb.table(cfg['table']).upsert(rows).execute())
+        print(f"   ↳ upserting {len(rows):>4} rows → {cfg['table']}")
+        sb.table(cfg['table']).upsert(rows).execute()
+# ──────────────────────────────────────────────────────────────────
+
 
 
 def main():
@@ -396,6 +442,42 @@ def main():
     upsert(entity, items)
     if entity in FLATTEN_MAP:
         FLATTEN_MAP[entity](items)
+
+# ─── CONVENIENCE WRAPPER FOR SUPABASE WEBHOOK ─────────────────────
+def run_full_sync():
+    """
+    Fetches **everything** we care about and writes it into Supabase.
+    Called by the /cron/hourly webhook so pg_cron doesn't need
+    to pass entity names one by one.
+    """
+    entities = [
+        "employees", "customers", "estimates",
+        "jobs", "job_appointments", "job_invoices",
+        "tsheets", "ramp_expenses"
+    ]
+
+    for entity in entities:
+        print(f"🔄 Syncing {entity} …")
+
+        # special‑case TSheets and Ramp because their fetchers differ
+        if entity == "tsheets":
+            items = ENTITY_CONFIG["tsheets"]["fetch"]()
+            FLATTEN_MAP["tsheets"](items)
+            continue
+
+        if entity == "ramp_expenses":
+            items = fetch_ramp_expenses()          # ← uses your no‑arg wrapper
+            upsert("ramp_expenses", items)
+            FLATTEN_MAP["ramp_expenses"](items)
+            continue
+
+        # default path for Housecall Pro entities
+        items = ENTITY_CONFIG[entity]["fetch"]()
+        upsert(entity, items)
+        if entity in FLATTEN_MAP:
+            FLATTEN_MAP[entity](items)
+
+    print("✅ Full ETL cycle completed")
 
 
 if __name__ == "__main__":
