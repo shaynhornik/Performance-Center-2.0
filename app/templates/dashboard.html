@@ -33,7 +33,9 @@
             {% elif k == 'avg_ticket' %}
               ${{ "{:,.2f}".format(kpi_values[k]) }}
             {% elif k == 'hours_worked' %}
-            {{ '%.2f'|format(kpi_values[k]) }} h
+              {{ '%.2f'|format(kpi_values[k]) }} h
+            {% elif k == 'avg_options_per_opportunity' %}
+              {{ "{:.2f}".format(kpi_values[k] | float) }}
             {% else %}
               {{ "{:,}".format(kpi_values[k] | int) }}
             {% endif %}
@@ -53,7 +55,6 @@
     {% endif %}
   {% endfor %}
 </div>
-
 
 
 

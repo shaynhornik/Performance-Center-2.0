@@ -62,6 +62,8 @@ def dashboard():
         ("attributed_revenue",   "Attributed Revenue"),
         ("memberships_sold",     "Memberships Sold"),
         ("hours_worked",         "Hours Worked"),
+        ("avg_hours_week",       "Avg Hrs/Week"),
+        ("avg_options_per_opportunity", "Avg Options/Opportunity"),
         ("sold_hours",           "Sold Hours"),
         ("hour_efficiency",      "Sold Hour Efficiency"),
     ]
@@ -209,6 +211,55 @@ def dashboard():
     total_seconds = sum(r["duration_seconds"] or 0 for r in (hrs_resp.data or []))
     # convert to hours
     kpi_values["hours_worked"] = round(total_seconds / 3600, 2)
+
+
+    # 6.6 ─── Compute Avg Hrs/Week ────────────────────────────
+    start_date = datetime.fromisoformat(start_iso).date()
+    end_date   = datetime.fromisoformat(end_iso).date()
+    days_count = (end_date - start_date).days + 1
+    weeks      = days_count / 7
+    avg_per_wk = round(kpi_values["hours_worked"] / weeks, 2) if weeks else 0
+    kpi_values["avg_hours_week"] = avg_per_wk
+    # ─────────────────────────────────────────────────────
+
+    # ─── 6.7 Avg Options per Opportunity ────────────────────────────
+    # 6.7.1) Find all estimates (opportunities) scheduled in the window
+    est_resp = (
+        sb
+        .table("estimates_flat")
+        .select("id")
+        .gte("scheduled_start", start_iso)
+        .lte("scheduled_start", end_iso)
+        .execute()
+    )
+    estimate_ids = [row["id"] for row in (est_resp.data or [])]
+    num_opps = len(estimate_ids)
+
+    # 6.7.2) Count all options for those estimates in chunks to avoid URI limits
+    total_opts = 0
+    chunk_size = 500
+    for i in range(0, num_opps, chunk_size):
+        chunk_ids = estimate_ids[i : i + chunk_size]
+        opt_resp = (
+            sb
+            .table("estimate_options_flat")
+            .select("option_id", count="exact")
+            .in_("estimate_id", chunk_ids)
+            .execute()
+        )
+        total_opts += opt_resp.count or len(opt_resp.data or [])
+
+    # 6.7.3) Compute average and format with two decimal places
+    if num_opps:
+        avg_opts = total_opts / num_opps
+    else:
+        avg_opts = 0
+    avg_opts_str = f"{avg_opts:.2f}"
+    kpi_values["avg_options_per_opportunity"] = avg_opts_str
+    # ─────────────────────────────────────────────────────────────
+
+
+
 
     
     # ─── Load saved layout & render ─────────────────────────────────
