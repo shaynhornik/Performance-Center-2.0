@@ -28,8 +28,8 @@
           <p class="mt-4 text-3xl font-bold text-indigo-500">
             {% if k == 'conversion_rate' %}
               {{ '%.1f'|format(kpi_values[k]) }}%
-            {% elif k in ['total_revenue','attributed_revenue'] %}
-              ${{ "{:,.2f}".format(kpi_values[k]) }}
+            {% elif k in ['total_revenue','attributed_revenue','total_spend'] %}
+              ${{ "{:,.2f}".format(kpi_values[k] | float) }}
             {% elif k == 'avg_ticket' %}
               ${{ "{:,.2f}".format(kpi_values[k]) }}
             {% elif k == 'hours_worked' %}
@@ -55,9 +55,6 @@
     {% endif %}
   {% endfor %}
 </div>
-
-
-
 
 {% if debug_estimate_ids %}
   <section class="mt-8 p-4 bg-gray-100 rounded">
@@ -160,4 +157,3 @@ resetBtn.addEventListener("click", () => {
 </script>
 
 {% endblock %}
-

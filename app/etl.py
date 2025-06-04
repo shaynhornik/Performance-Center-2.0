@@ -1,3 +1,5 @@
+# app/etl.py
+
 import os
 import sys
 import time
@@ -5,7 +7,9 @@ import requests
 import asyncio
 import aiohttp
 from datetime import date, datetime, timedelta
+from postgrest.exceptions import APIError
 from app.db import get_supabase
+import scripts.fetch_ramp_expenses as ramp_fetcher
 
 print("🔧 Loading ETL module as:", __name__, "– sys.argv:", sys.argv)
 
@@ -71,7 +75,7 @@ def flatten_estimates(items):
                 "company_id":      est.get("company_id"),
                 "estimate_number": est.get("estimate_number"),
             })
-    print(f"Flattening {len(rows)} estimate‑tech pairs → estimates_flat")
+    print(f"Flattening {len(rows)} estimate-tech pairs → estimates_flat")
     sb.table("estimates_flat").upsert(rows).execute()
 
 
@@ -99,7 +103,7 @@ def flatten_jobs(items):
                 "company_id":          job.get("company_id"),
                 "assigned_count":      count,
             })
-    print(f"Flattening {len(rows)} job‑tech pairs → jobs_flat")
+    print(f"Flattening {len(rows)} job-tech pairs → jobs_flat")
     sb.table("jobs_flat").upsert(rows).execute()
 
 
@@ -118,11 +122,9 @@ def flatten_job_appointments(items):
                 "arrival_window_minutes": appt.get("arrival_window_minutes"),
             })
 
-    print(f"Flattening {len(rows)} appt‑tech pairs → job_appointments_flat")
-
-    if rows:                                   # ← guard: only upsert if >0
+    print(f"Flattening {len(rows)} appt-tech pairs → job_appointments_flat")
+    if rows:
         sb.table("job_appointments_flat").upsert(rows).execute()
-
 
 
 def flatten_job_invoices(items):
@@ -141,22 +143,18 @@ def flatten_job_invoices(items):
     } for inv in items]
 
     print(f"Flattening {len(rows)} invoices → job_invoices_flat")
-
-    if rows:                                   # ← guard: only upsert if >0
+    if rows:
         sb.table("job_invoices_flat").upsert(rows).execute()
-
 
 
 def flatten_tsheets(items):
     sb = get_supabase()
     rows = []
     for ts in items:
-        # turn empty‐string timestamps into NULLs
         start = ts.get("start") or None
         end   = ts.get("end")   or None
         lm    = ts.get("last_modified") or None
 
-        # map TSheets user → HCP technician
         map_resp = (
             sb.table("tsheets_user_mapping")
               .select("technician_id")
@@ -192,8 +190,6 @@ def flatten_tsheets(items):
     sb.table("tsheets_time_entries").upsert(rows).execute()
 
 
-
-
 # ─── INITIAL FLATTEN MAP ───────────────────────────────────────────────────
 FLATTEN_MAP = {
     "employees":        flatten_employees,
@@ -206,13 +202,15 @@ FLATTEN_MAP = {
 }
 
 # ─── RAMP EXPENSES FETCHER & FLATTENER ────────────────────────────────
+
+# ─── RAMP EXPENSES FETCHER & FLATTENER (match by name) ───────────────────
 import scripts.fetch_ramp_expenses as ramp_fetcher
+from datetime import datetime, timedelta
+from app.db import get_supabase
 
 def fetch_ramp_expenses():
     """
-    Return all Ramp transactions from the past 90 days.
-    Adjust the window as needed (e.g. 30 days for hourly runs,
-    or very wide for a one‑time bootstrap).
+    Return all Ramp transactions from the past 90 days.
     """
     to_dt   = datetime.utcnow()
     from_dt = to_dt - timedelta(days=90)
@@ -223,10 +221,35 @@ def fetch_ramp_expenses():
     )
 
 def flatten_ramp_expenses(items):
-    """Flatten the Ramp expense dicts into ramp_expenses_flat."""
+    """
+    Flatten Ramp expense dicts into ramp_expenses_flat,
+    trying to match technician by first_name + last_name.
+    """
     sb = get_supabase()
     rows = []
+
     for exp in items:
+        # 1) Pull out card_holder first+last
+        card_holder = exp.get("card_holder") or {}
+        first = card_holder.get("first_name")
+        last  = card_holder.get("last_name")
+
+        # 2) Default tech_id to None, then attempt a name‐based lookup
+        tech_id = None
+        if first and last:
+            mapping_resp = (
+                sb
+                  .table("hcp_raw_employees")
+                  .select("id")
+                  .eq("payload->>first_name", first)
+                  .eq("payload->>last_name", last)
+                  .maybe_single()
+                  .execute()
+            )
+            if mapping_resp and mapping_resp.data:
+                tech_id = mapping_resp.data.get("id")
+
+        # 3) Build the flat row, including whatever tech_id we found (or None)
         rows.append({
             "id":                exp["id"],
             "transaction_time":  exp.get("user_transaction_time"),
@@ -237,11 +260,12 @@ def flatten_ramp_expenses(items):
             "status":            exp.get("state"),
             "receipt_count":     len(exp.get("receipts", [])),
             "synced_at":         exp.get("synced_at"),
+            "technician_id":     tech_id,
         })
+
     print(f"Flattening {len(rows)} ramp expenses → ramp_expenses_flat")
     if rows:
         sb.table("ramp_expenses_flat").upsert(rows).execute()
-
 
 FLATTEN_MAP["ramp_expenses"] = flatten_ramp_expenses
 # ───────────────────────────────────────────────────────────────────────
@@ -256,7 +280,6 @@ def fetch_tsheets_users():
     users = resp.json().get("results", {}).get("users", {}) or {}
     return list(users.values())
 
-
 def flatten_tsheets_users(items):
     sb = get_supabase()
     rows = [{
@@ -268,7 +291,6 @@ def flatten_tsheets_users(items):
     print(f"Flattening {len(rows)} TSheets users → tsheets_users_flat")
     sb.table("tsheets_users_flat").upsert(rows).execute()
 
-# register users flattener
 FLATTEN_MAP["tsheets_users"] = flatten_tsheets_users
 
 # ─── HOUSECALL PRO FETCHERS ─────────────────────────────────────────────────
@@ -303,19 +325,10 @@ async def _get_json(session, url):
             return await resp.json()
 
 async def _fetch_nested(job_ids, nested):
-    """
-    Fetch /jobs/<id>/<nested> for every job.
-    `nested` is either 'job_appointments' or 'job_invoices'
-    (legacy names used in ENTITY_CONFIG).
-
-    New API paths & keys:
-        job_appointments → appointments
-        job_invoices     → invoices
-    """
     path_key = {
         "job_appointments": "appointments",
         "job_invoices":     "invoices",
-    }[nested]                         # will KeyError if we typo 'nested'
+    }[nested]
 
     base_url = f"{HCP_BASE_URL}/jobs"
     all_items = []
@@ -330,18 +343,17 @@ async def _fetch_nested(job_ids, nested):
 
         for task in asyncio.as_completed(tasks):
             data = await task
-            if not data:               # 404 or 204 ⇒ skip
+            if not data:
                 continue
             all_items.extend(data.get(path_key, []))
 
     return all_items
 
 
-
-def fetch_employees():      return fetch_paginated(f"{HCP_BASE_URL}/employees", "employees")
-def fetch_customers():      return fetch_paginated(f"{HCP_BASE_URL}/customers", "customers")
-def fetch_estimates():      return fetch_paginated(f"{HCP_BASE_URL}/estimates", "estimates")
-def fetch_jobs():           return fetch_paginated(f"{HCP_BASE_URL}/jobs",      "jobs")
+def fetch_employees():       return fetch_paginated(f"{HCP_BASE_URL}/employees", "employees")
+def fetch_customers():       return fetch_paginated(f"{HCP_BASE_URL}/customers", "customers")
+def fetch_estimates():       return fetch_paginated(f"{HCP_BASE_URL}/estimates", "estimates")
+def fetch_jobs():            return fetch_paginated(f"{HCP_BASE_URL}/jobs",      "jobs")
 def fetch_job_appointments(): return asyncio.run(_fetch_nested(_job_ids(), "job_appointments"))
 def fetch_job_invoices():     return asyncio.run(_fetch_nested(_job_ids(), "job_invoices"))
 
@@ -381,28 +393,21 @@ def fetch_all_tsheets_timesheets(start_date: str, end_date: str):
 
 # ─── ENTITY CONFIG ───────────────────────────────────────────────────────────
 ENTITY_CONFIG = {
-    "employees":        {"fetch": fetch_employees, "table": "hcp_raw_employees",       "id": lambda itm: itm["id"]},
-    "customers":        {"fetch": fetch_customers, "table": "hcp_raw_customers",       "id": lambda itm: itm["id"]},
-    "estimates":        {"fetch": fetch_estimates, "table": "hcp_raw_estimates",      "id": lambda itm: itm["id"]},
-    "jobs":             {"fetch": fetch_jobs,      "table": "hcp_raw_jobs",            "id": lambda itm: itm["id"]},
-    "job_appointments": {"fetch": fetch_job_appointments, "table": "hcp_raw_job_appointments", "id": lambda itm: itm["id"]},
-    "job_invoices":     {"fetch": fetch_job_invoices,    "table": "hcp_raw_job_invoices",     "id": lambda itm: itm["id"]},
+    "employees":        {"fetch": fetch_employees,        "table": "hcp_raw_employees",        "id": lambda itm: itm["id"]},
+    "customers":        {"fetch": fetch_customers,        "table": "hcp_raw_customers",        "id": lambda itm: itm["id"]},
+    "estimates":        {"fetch": fetch_estimates,        "table": "hcp_raw_estimates",       "id": lambda itm: itm["id"]},
+    "jobs":             {"fetch": fetch_jobs,             "table": "hcp_raw_jobs",            "id": lambda itm: itm["id"]},
+    "job_appointments": {"fetch": fetch_job_appointments, "table": "hcp_raw_job_appointments","id": lambda itm: itm["id"]},
+    "job_invoices":     {"fetch": fetch_job_invoices,     "table": "hcp_raw_job_invoices",    "id": lambda itm: itm["id"]},
     "tsheets":          {"fetch": lambda: fetch_all_tsheets_timesheets("2022-06-12", date.today().isoformat()),
-                             "table": "tsheets_time_entries",   
-                             "id":    lambda itm: itm["id"]},
-    "tsheets_users":    {"fetch": fetch_tsheets_users,        "table": "tsheets_users_flat",
-                             "id":    lambda u: u["id"]},
-    "ramp_expenses": {
-        "fetch": fetch_ramp_expenses,
-        "table": "ramp_raw_expenses",
-        "id":    lambda exp: exp["id"],
-    },
-    "bootstrap":        {"fetch": lambda: None,            "table": None,                   "id": None},
+                         "table": "tsheets_time_entries",  "id": lambda itm: itm["id"]},
+    "tsheets_users":    {"fetch": fetch_tsheets_users,     "table": "tsheets_users_flat",      "id": lambda u: u["id"]},
+    "ramp_expenses":    {"fetch": fetch_ramp_expenses,     "table": "ramp_raw_expenses",       "id": lambda exp: exp["id"]},
+    "bootstrap":        {"fetch": lambda: None,            "table": None,                     "id": None},
 }
 
-# ─── UPSERT & CLI ENTRY ───────────────────────────────────────────────────────
 
-# ─── REPLACE your current upsert() with this version ──────────────
+# ─── UPSERT & CLI ENTRY ───────────────────────────────────────────────────────
 def upsert(entity: str, items):
     """
     Push raw payloads into the *_raw_* table for <entity>.
@@ -410,13 +415,11 @@ def upsert(entity: str, items):
     """
     cfg = ENTITY_CONFIG[entity]
     sb  = get_supabase()
-    rows = [{"id": cfg["id"](itm), "payload": itm} for itm in items]
+    rows = [{ "id": cfg["id"](itm), "payload": itm } for itm in items]
 
     if rows:
         print(f"   ↳ upserting {len(rows):>4} rows → {cfg['table']}")
         sb.table(cfg['table']).upsert(rows).execute()
-# ──────────────────────────────────────────────────────────────────
-
 
 
 def main():
@@ -443,6 +446,7 @@ def main():
     if entity in FLATTEN_MAP:
         FLATTEN_MAP[entity](items)
 
+
 # ─── CONVENIENCE WRAPPER FOR SUPABASE WEBHOOK ─────────────────────
 def run_full_sync():
     """
@@ -459,19 +463,19 @@ def run_full_sync():
     for entity in entities:
         print(f"🔄 Syncing {entity} …")
 
-        # special‑case TSheets and Ramp because their fetchers differ
+        # special-case TSheets and Ramp because their fetchers differ
         if entity == "tsheets":
             items = ENTITY_CONFIG["tsheets"]["fetch"]()
             FLATTEN_MAP["tsheets"](items)
             continue
 
         if entity == "ramp_expenses":
-            items = fetch_ramp_expenses()          # ← uses your no‑arg wrapper
+            items = fetch_ramp_expenses()
             upsert("ramp_expenses", items)
             FLATTEN_MAP["ramp_expenses"](items)
             continue
 
-        # default path for Housecall Pro entities
+        # default path for Housecall Pro entities
         items = ENTITY_CONFIG[entity]["fetch"]()
         upsert(entity, items)
         if entity in FLATTEN_MAP:
@@ -482,8 +486,3 @@ def run_full_sync():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
