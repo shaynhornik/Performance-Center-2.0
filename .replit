@@ -1,20 +1,24 @@
-run =  ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
-entrypoint = "main.py"
-modules = ["python-3.11"]
+# .replit ─────────────────────────────────────────────
+run = ["gunicorn",
+       "--workers", "1",
+       "--timeout", "300",          # 5‑minute cold‑start window
+       "--bind", "0.0.0.0:5000",
+       "main:app"]
 
-hidden = [".pythonlibs"]
+modules = ["python-3.11"]
+hidden  = [".pythonlibs"]
 
 [nix]
 channel = "stable-24_05"
 
 [deployment]
-run =  ["gunicorn", "--bind", "0.0.0.0:5000", "main:app"]
-deploymentTarget = "cloudrun"
+run              = ["gunicorn",
+                    "--workers", "1",
+                    "--timeout", "300",
+                    "--bind", "0.0.0.0:5000",
+                    "main:app"]
+deploymentTarget = "gce"            # Reserved VM
 
 [[ports]]
-localPort = 3000
-externalPort = 3000
-
-[[ports]]
-localPort = 5000
+localPort    = 5000
 externalPort = 80
