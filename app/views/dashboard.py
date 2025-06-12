@@ -67,7 +67,6 @@ def dashboard():
         ("avg_options_per_opportunity", "Avg Options/Opportunity"),
         ("sold_hours", "Sold Hours"),
         ("hour_efficiency", "Sold Hour Efficiency"),
-        # ────────── NEW: Total Spend ───────────────────
         ("total_spend", "Total Spend"),
     ]
     time_options = [
