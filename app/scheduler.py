@@ -1,82 +1,81 @@
+# app/scheduler.py
 """
-Lightweight ETL orchestrator for Honey Go Fix It.
-Runs inside Replit; uses APScheduler + Supabase pg_cron checkpoints.
+Scheduler for Honey Go Fix It ETL.
+
+• Runs the *full* ETL every hour on the hour (UTC).
+• Fires one “bootstrap” run ~10 s after each cold start so the first
+  sync happens immediately.
+• Shares the asyncio event-loop Gunicorn/Uvicorn already uses.
+• Guarantees at most one ETL at a time (max_instances=1, coalesce=True).
 """
 
-import asyncio, os
+from __future__ import annotations
+
+import asyncio
+import os
 from datetime import datetime, timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from app.db import get_supabase
-from app import etl                       # your existing ETL module
+from fastapi import FastAPI
+import uvicorn
 
-TZ = timezone.utc        # keep UTC in DB; convert only for display
-
-SB = get_supabase()
-GRACE = timedelta(minutes=5)              # overlap window
+from app.etl import run_full_sync      # ← your coroutine
 
 
-def _get_checkpoint(entity: str) -> datetime:
-    res = SB.table("etl_checkpoints").select("last_synced_at")\
-              .eq("entity", entity).maybe_single().execute()
-    return res.data["last_synced_at"] if res and res.data else datetime(1970,1,1,tzinfo=TZ)
+# ─────────────────────────────────────────────────────────────────────────────
+# Helper that APScheduler calls
+# ─────────────────────────────────────────────────────────────────────────────
+def _run_etl(tag: str) -> None:
+    """
+    Schedule the ETL coroutine on the current event-loop
+    and log the reason it was triggered.
+    """
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    print(f"🚀  Triggering {tag} sync @ {now}")
+    asyncio.create_task(run_full_sync())
 
 
-def _set_checkpoint(entity: str, ts: datetime):
-    SB.table("etl_checkpoints").upsert({"entity": entity,
-                                        "last_synced_at": ts}).execute()
+# ─────────────────────────────────────────────────────────────────────────────
+# APScheduler configuration
+# ─────────────────────────────────────────────────────────────────────────────
+sched = AsyncIOScheduler(timezone="UTC")
+
+# 1️⃣  Hourly job – fires every hour on the hour
+sched.add_job(
+    _run_etl,
+    trigger="cron",
+    minute=0,
+    id="hourly_full_sync",
+    args=["hourly"],
+    max_instances=1,          # never overlap runs
+    coalesce=True,            # collapse missed runs into one
+    misfire_grace_time=90,
+)
+
+# 2️⃣  Bootstrap job – runs once ~10 s after every cold start / deploy
+if not os.getenv("SKIP_BOOTSTRAP_SYNC"):
+    sched.add_job(
+        _run_etl,
+        trigger="date",
+        run_date=datetime.now(timezone.utc) + timedelta(seconds=10),
+        id="bootstrap_full_sync",
+        args=["bootstrap"],
+    )
+
+sched.start()
+print("🕰️  Scheduler started – hourly full-sync + bootstrap queued")
 
 
-async def sync(entity: str):
-    start = _get_checkpoint(entity) - GRACE
-    end   = datetime.now(tz=TZ)
-    print(f"🔄  Syncing {entity} from {start} to {end}")
+# ─────────────────────────────────────────────────────────────────────────────
+# Minimal FastAPI app so the process exposes something on port $PORT
+# ─────────────────────────────────────────────────────────────────────────────
+app = FastAPI()
 
-    # call the right ETL fetcher
-    if entity == "ramp_expenses":
-        items = etl.ramp_fetcher.fetch_all_transactions(
-                   start.isoformat(), end.isoformat())
-    elif entity == "tsheets":
-        items = etl.fetch_all_tsheets_timesheets(
-                   start.date().isoformat(), end.date().isoformat())
-    elif entity == "hcp":
-        items = etl.fetch_jobs()          # temporary – no delta API yet
-    else:
-        raise ValueError(f"Unknown entity {entity}")
-
-    # raw‑upsert + flatten via existing helpers
-    etl.upsert(entity, items)
-    etl.FLATTEN_MAP[entity](items)
-
-    _set_checkpoint(entity, end)
-    print(f"✅  {entity} sync complete ({len(items)} records)")
-
-
-async def run_hourly():
-    await sync("hcp")
-    await sync("tsheets")
-    await sync("ramp_expenses")
-
-
-def start_scheduler():
-    sched = AsyncIOScheduler(timezone="America/New_York")
-    # Hourly 06:00‑22:00 ET
-    sched.add_job(run_hourly, "cron", hour="6-22", minute=0)
-    # Deep sweep once a night
-    sched.add_job(run_hourly, "cron", hour=3, minute=0)
-    sched.start()
-    print("🕰️  Scheduler started…")
+@app.get("/health")
+def health():
+    """Simple liveness probe."""
+    return {"status": "ok", "time": datetime.now(timezone.utc).isoformat()}
 
 
 if __name__ == "__main__":
-    import uvicorn
-    from fastapi import FastAPI
-
-    start_scheduler()                     # keep APScheduler alive
-
-    app = FastAPI()
-
-    @app.get("/health")
-    def health(): return {"status": "ok", "time": datetime.now()}
-
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
